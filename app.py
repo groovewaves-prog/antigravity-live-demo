@@ -24,7 +24,6 @@ def render_topology(alarms, root_cause_node, root_severity="CRITICAL"):
         fontcolor = "black"
         label = f"{node_id}\n({node.type})"
         
-        # メタデータの表示
         red_type = node.metadata.get("redundancy_type")
         if red_type:
             label += f"\n[{red_type} Redundancy]"
@@ -33,7 +32,6 @@ def render_topology(alarms, root_cause_node, root_severity="CRITICAL"):
         if vendor:
             label += f"\n[{vendor}]"
 
-        # 根本原因の強調
         if root_cause_node and node_id == root_cause_node.id:
             if root_severity == "CRITICAL":
                 color = "#ffcdd2" # Red
@@ -84,15 +82,11 @@ else:
 # --- サイドバー ---
 with st.sidebar:
     st.header("⚡ 運用モード選択")
-    
-    # ★変更: 名称をシンプル化
     app_mode = st.radio("機能選択:", ("🚨 障害対応", "🔧 設定生成"))
-    
     st.markdown("---")
     
     selected_scenario = "正常稼働"
     
-    # ★変更: 条件分岐も新しい名称に合わせる
     if app_mode == "🚨 障害対応":
         SCENARIO_MAP = {
             "基本・広域障害": ["正常稼働", "1. WAN全回線断", "2. FW片系障害", "3. L2SWサイレント障害"],
@@ -121,7 +115,7 @@ if "current_mode" not in st.session_state:
 
 if st.session_state.current_mode != app_mode:
     st.session_state.current_mode = app_mode
-    st.session_state.messages = [] # モード切替時にチャットクリア
+    st.session_state.messages = []
     st.rerun()
 
 # ==========================================
@@ -129,7 +123,6 @@ if st.session_state.current_mode != app_mode:
 # ==========================================
 if app_mode == "🚨 障害対応":
     
-    # シナリオ変更時のリセット処理
     if "current_scenario" not in st.session_state:
         st.session_state.current_scenario = "正常稼働"
     
@@ -141,7 +134,6 @@ if app_mode == "🚨 障害対応":
         st.session_state.trigger_analysis = False
         st.rerun()
 
-    # アラーム生成
     alarms = []
     root_severity = "CRITICAL"
 
@@ -192,7 +184,6 @@ if app_mode == "🚨 障害対応":
         elif inference_result.severity == "WARNING":
             root_severity = "WARNING"
 
-    # メイン画面 (AIOps)
     col1, col2 = st.columns([1, 1])
 
     with col1:
@@ -243,8 +234,8 @@ if app_mode == "🚨 障害対応":
         should_start_chat = (st.session_state.chat_session is None) and (selected_scenario != "正常稼働")
         if should_start_chat:
             genai.configure(api_key=api_key)
-            # ★変更: gemini-1.5-flash に戻す
-            model = genai.GenerativeModel("gemini-1.5-flash", generation_config={"temperature": 0.0})
+            # ★変更: gemini-1.5-flash-latest
+            model = genai.GenerativeModel("gemini-1.5-flash-latest", generation_config={"temperature": 0.0})
             
             system_prompt = ""
             if st.session_state.live_result:
@@ -346,3 +337,22 @@ elif app_mode == "🔧 設定生成":
                  with st.spinner("Generating..."):
                      cmds = generate_health_check_commands(target_node, api_key)
                      st.code(cmds, language="text")
+
+# --- app.py に一時的に追加するコード ---
+
+# サイドバーの一番下に追加すると便利です
+with st.sidebar:
+    st.markdown("---")
+    st.subheader("🛠 モデル確認ツール")
+    if st.button("利用可能なモデルを表示"):
+        if not api_key:
+            st.error("API Keyを入れてください")
+        else:
+            try:
+                genai.configure(api_key=api_key)
+                st.write("▼ 利用可能なモデル一覧")
+                for m in genai.list_models():
+                    if 'generateContent' in m.supported_generation_methods:
+                        st.code(m.name) # 画面に表示
+            except Exception as e:
+                st.error(f"エラー: {e}")
