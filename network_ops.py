@@ -7,11 +7,12 @@ import time
 import google.generativeai as genai
 from netmiko import ConnectHandler
 
+# ★修正: 接続先をより安定した IOS-XE Sandbox に変更
 SANDBOX_DEVICE = {
-    'device_type': 'cisco_nxos',
-    'host': 'sandbox-nxos-1.cisco.com',
-    'username': 'admin',
-    'password': 'Admin_1234!',
+    'device_type': 'cisco_ios',                # NX-OS -> IOS
+    'host': 'sandbox-iosxe-recomm-1.cisco.com', # 推奨サーバー
+    'username': 'developer',                   # ユーザー名変更
+    'password': 'C1sco12345',                  # パスワード変更
     'port': 22,
     'global_delay_factor': 2,
     'banner_timeout': 30,
@@ -33,7 +34,6 @@ def sanitize_output(text: str) -> str:
 
 def generate_fake_log_by_ai(scenario_name, target_node, api_key):
     if not api_key: return "Error: API Key Missing"
-    
     genai.configure(api_key=api_key)
     # モデル: gemma-3-12b-it
     model = genai.GenerativeModel(
@@ -41,75 +41,32 @@ def generate_fake_log_by_ai(scenario_name, target_node, api_key):
         generation_config={"temperature": 0.0}
     )
     
-    # --- 1. メタデータから機器情報を取得 (ハードコーディング廃止) ---
-    # デフォルト値を "Unknown" に変更し、勝手な推測を防ぐ
     vendor = target_node.metadata.get("vendor", "Unknown Vendor")
     os_type = target_node.metadata.get("os", "Unknown OS")
     model_name = target_node.metadata.get("model", "Generic Device")
     hostname = target_node.id
 
-    # --- 2. 障害状態の定義 ---
     status_instructions = ""
-    
     if "電源" in scenario_name and "片系" in scenario_name:
-        status_instructions = """
-        【状態定義: 電源冗長稼働中 (片系ダウン)】
-        1. ハードウェアステータス: Power Supply 1: **Faulty / Failed**, Power Supply 2: **OK**
-        2. サービス影響: なし
-        3. エラーログ: 電源障害を示すログを含めること。
-        """
+        status_instructions = "電源片系故障。PS1:Fail, PS2:OK。通信影響なし。"
     elif "電源" in scenario_name and "両系" in scenario_name:
-        status_instructions = """
-        【状態定義: 全電源喪失】
-        1. ログ: "Connection Refused" またはブートログのみ。
-        """
+        status_instructions = "全電源喪失。ログなし(接続不可)またはブートログ。"
     elif "FAN" in scenario_name:
-        status_instructions = """
-        【状態定義: ファン故障】
-        1. ハードウェアステータス: Fan Tray 1 **Failure**
-        2. 温度: Warning
-        """
+        status_instructions = "FAN故障。Fan1:Fail。温度上昇中だが稼働。"
     elif "メモリ" in scenario_name:
-        status_instructions = """
-        【状態定義: メモリリーク】
-        1. メモリ使用率: **98%以上**
-        2. プロセス: 特定のプロセスが異常消費している様子を示すこと。
-        3. Syslog: メモリ割り当て失敗を含めること。
-        """
+        status_instructions = "メモリリーク。使用率99%。特定プロセスが消費。"
     elif "BGP" in scenario_name:
-        status_instructions = """
-        【状態定義: BGPフラッピング】
-        1. BGP状態: Neighbor State が Idle / Active を繰り返している。
-        2. 物理IF: UP/UP
-        """
+        status_instructions = "BGPフラッピング。Neighbor StateがIdle/Activeを繰り返す。"
     elif "全回線断" in scenario_name:
-        status_instructions = """
-        【状態定義: 物理リンクダウン】
-        1. 主要インターフェース: **DOWN / DOWN**
-        2. Ping: 100% Loss
-        """
+        status_instructions = "物理リンクダウン。Interface Down。"
 
     prompt = f"""
-    あなたはネットワーク機器のCLIシミュレーターです。
-    指定された機器スペックと障害シナリオに基づき、エンジニアが調査を行った際の「コマンド実行ログ」を生成してください。
-
-    **対象機器スペック**:
-    - Hostname: {hostname}
-    - Vendor: {vendor}
-    - OS: {os_type}
-    - Model: {model_name}
-
-    **発生シナリオ**: {scenario_name}
-
-    {status_instructions}
-
-    **出力要件**:
-    1. 指定された **{vendor} {os_type}** に存在するコマンドと出力形式を使用すること。
-       (Unknownの場合は一般的なCiscoライクな形式で出力すること)
-    2. 解説不要。**CLIの生テキストのみ**を出力すること。
-    3. 矛盾する情報は含めないこと。
+    あなたはネットワーク機器CLIシミュレーターです。
+    シナリオ: {scenario_name}
+    対象: {hostname} ({vendor} {os_type})
+    状態指示: {status_instructions}
+    出力: コマンド実行結果の生ログのみ(解説不要)。矛盾なきよう生成せよ。
     """
-    
     try:
         response = model.generate_content(prompt)
         return response.text
@@ -121,26 +78,14 @@ def generate_config_from_intent(target_node, current_config, intent_text, api_ke
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel("gemma-3-12b-it", generation_config={"temperature": 0.0})
     
-    # ★修正: デフォルト値を "Unknown" に変更
     vendor = target_node.metadata.get("vendor", "Unknown Vendor")
     os_type = target_node.metadata.get("os", "Unknown OS")
     
     prompt = f"""
-    ネットワーク設定生成。
-    
-    【対象機器】
-    - Hostname: {target_node.id}
-    - Vendor: {vendor}
-    - OS: {os_type}
-    
-    【現在のConfig】
-    {current_config}
-    
-    【Intent】
-    {intent_text}
-    
-    出力: 投入用コマンドのみ (Markdownコードブロック)
-    ※VendorがUnknownの場合は、最も一般的と思われるコマンド(Cisco等)を提案し、その旨を注記してください。
+    Config生成。対象: {target_node.id} ({vendor} {os_type})
+    現状: {current_config}
+    意図: {intent_text}
+    出力: 投入コマンドのみ(Markdown)
     """
     try:
         response = model.generate_content(prompt)
@@ -153,17 +98,10 @@ def generate_health_check_commands(target_node, api_key):
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel("gemma-3-12b-it", generation_config={"temperature": 0.0})
     
-    # ★修正: デフォルト値を "Unknown" に変更
     vendor = target_node.metadata.get("vendor", "Unknown Vendor")
     os_type = target_node.metadata.get("os", "Unknown OS")
     
-    prompt = f"""
-    Netmikoで使用する正常性確認コマンドを3つ～5つ生成してください。
-    
-    対象機器: {vendor} {os_type}
-    
-    出力形式: コマンドのみを箇条書き
-    """
+    prompt = f"正常性確認コマンドを3つ生成せよ。対象: {vendor} {os_type}。出力: コマンドのみ箇条書き"
     try:
         response = model.generate_content(prompt)
         return response.text
@@ -177,7 +115,8 @@ def run_diagnostic_simulation(scenario_type, target_node=None, api_key=None):
         return {"status": "SKIPPED", "sanitized_log": "No action required.", "error": None}
 
     if "[Live]" in scenario_type:
-        commands = ["terminal length 0", "show version", "show interface brief", "show ip route"]
+        # IOS用の基本コマンドに変更
+        commands = ["terminal length 0", "show version", "show ip interface brief", "show ip route"]
         try:
             with ConnectHandler(**SANDBOX_DEVICE) as ssh:
                 if not ssh.check_enable_mode(): ssh.enable()
